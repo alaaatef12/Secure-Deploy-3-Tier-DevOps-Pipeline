@@ -1,0 +1,89 @@
+---
+- name: Install and harden Apache
+  hosts: webservers
+  become: true
+  become_user: root  # This ensures that Ansible runs commands as the root user
+  tasks:
+
+    - name: Install Apache
+      yum:
+        name: httpd
+        state: present
+
+    - name: Ensure Apache is started and enabled
+      service:
+        name: httpd
+        state: started
+        enabled: true
+
+    - name: Create custom document root
+      file:
+        path: /srv/www
+        state: directory
+        owner: apache
+        group: apache
+        mode: '0755'
+
+    - name: Update Apache config to use custom root
+      lineinfile:
+        path: /etc/httpd/conf/httpd.conf
+        regexp: '^DocumentRoot '
+        line: 'DocumentRoot "/srv/www"'
+        backup: yes
+
+    - name: Update Directory directive to match new root
+      blockinfile:
+        path: /etc/httpd/conf/httpd.conf
+        marker: "# {mark} Ansible managed block for /srv/www"
+        block: |
+          <Directory "/srv/www">
+              AllowOverride None
+              Require ip 172.20.132.125
+          </Directory>
+
+    - name: Disable ServerSignature
+      lineinfile:
+        path: /etc/httpd/conf/httpd.conf
+        line: 'ServerSignature Off'
+        create: yes
+
+    - name: Disable ServerTokens
+      lineinfile:
+        path: /etc/httpd/conf/httpd.conf
+        line: 'ServerTokens Prod'
+        create: yes
+
+    - name: Add custom log format
+      lineinfile:
+        path: /etc/httpd/conf/httpd.conf
+        insertafter: EOF
+        line: 'LogFormat "%h %l %u %t \"%r\" %>s %b" custom'
+
+    - name: Set custom log format for access log
+      lineinfile:
+        path: /etc/httpd/conf/httpd.conf
+        regexp: '^CustomLog '
+        line: 'CustomLog "logs/access_log" custom'
+
+    - name: Create logrotate config for Apache
+      copy:
+        dest: /etc/logrotate.d/httpd
+        content: |
+          /var/log/httpd/*log {
+              daily
+              missingok
+              rotate 14
+              compress
+              delaycompress
+              notifempty
+              create 0640 root root
+              sharedscripts
+              postrotate
+                  /bin/systemctl reload httpd.service > /dev/null 2>/dev/null || true
+              endscript
+          }
+
+    - name: Restart Apache to apply changes
+      service:
+        name: httpd
+        state: restarted
